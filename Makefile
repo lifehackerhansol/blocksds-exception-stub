@@ -1,145 +1,187 @@
-#---------------------------------------------------------------------------------
-.SUFFIXES:
-#---------------------------------------------------------------------------------
+# SPDX-License-Identifier: CC0-1.0
+#
+# SPDX-FileContributor: Antonio Niño Díaz, 2023
 
-ifeq ($(strip $(DEVKITARM)),)
-$(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM")
-endif
+BLOCKSDS	?= /opt/blocksds/core
+BLOCKSDSEXT	?= /opt/blocksds/external
 
-include $(DEVKITARM)/ds_rules
+WONDERFUL_TOOLCHAIN	?= /opt/wonderful
+ARM_NONE_EABI_PATH	?= $(WONDERFUL_TOOLCHAIN)/toolchain/gcc-arm-none-eabi/bin/
 
-#---------------------------------------------------------------------------------
-# TARGET is the name of the output
-# BUILD is the directory where object files & intermediate files will be placed
-# SOURCES is a list of directories containing source code
-# INCLUDES is a list of directories containing extra header files
-# DATA is a list of directories containing binary files embedded using bin2o
-# GRAPHICS is a list of directories containing image files to be converted with grit
-#---------------------------------------------------------------------------------
-TARGET		:=	$(shell basename $(CURDIR))
-BUILD		:=	build
-SOURCES		:=	source
-INCLUDES	:=	include ../include
-DATA		:=	data  
-GRAPHICS	:=	gfx  
+# User config
+# ===========
 
-#---------------------------------------------------------------------------------
-# options for code generation
-#---------------------------------------------------------------------------------
+NAME		:= $(shell basename $(CURDIR))
 
-ARCH	:=	-mthumb -mthumb-interwork -Os
+# Source code paths
+# -----------------
 
-CFLAGS	:=	-g -Wall \
- 		-march=armv5te -mtune=arm946e-s -fomit-frame-pointer\
-		-ffast-math \
-		$(ARCH)
+SOURCEDIRS	:= source
+INCLUDEDIRS	:=
+BINDIRS		:= data
 
-CFLAGS	+=	$(INCLUDE) -DARM9
-CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
+# Defines passed to all files
+# ---------------------------
 
-ASFLAGS	:=	-g $(ARCH)
-LDFLAGS	=	-nostartfiles -T../exceptionstub.ld -Wl,--section-start,.crt0=0x2ffa000 -Wl,--no-warn-rwx-segments -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+DEFINES		:=
 
-#---------------------------------------------------------------------------------
-# any extra libraries we wish to link with the project (order is important)
-#---------------------------------------------------------------------------------
-LIBS	:= 	-lnds9
- 
- 
-#---------------------------------------------------------------------------------
-# list of directories containing libraries, this must be the top level containing
-# include and lib
-#---------------------------------------------------------------------------------
-LIBDIRS	:=	$(LIBNDS)
- 
-#---------------------------------------------------------------------------------
-# no real need to edit anything past this point unless you need to add additional
-# rules for different file extensions
-#---------------------------------------------------------------------------------
-ifneq ($(BUILD),$(notdir $(CURDIR)))
-#---------------------------------------------------------------------------------
+# Libraries
+# ---------
 
-export STUBBIN	?=	$(CURDIR)/$(TARGET).bin
-export STUBELF	:=	$(CURDIR)/$(TARGET).elf
+LIBS		:= -lnds9 -lc
+LIBDIRS		:= $(BLOCKSDS)/libs/libnds
 
-export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
-					$(foreach dir,$(DATA),$(CURDIR)/$(dir)) \
-					$(foreach dir,$(GRAPHICS),$(CURDIR)/$(dir))
+# Build artifacts
+# -----------------
 
-export DEPSDIR	:=	$(CURDIR)/$(BUILD)
+BUILDDIR	:= build/
+ELF		:= build/$(NAME).elf
+DUMP		:= build/$(NAME).dump
+MAP		:= build/$(NAME).map
+export STUBBIN	?=	$(CURDIR)/$(NAME).bin
 
-CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
-CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
-SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
-PNGFILES	:=	$(foreach dir,$(GRAPHICS),$(notdir $(wildcard $(dir)/*.png)))
-BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
- 
-#---------------------------------------------------------------------------------
-# use CXX for linking C++ projects, CC for standard C
-#---------------------------------------------------------------------------------
-ifeq ($(strip $(CPPFILES)),)
-#---------------------------------------------------------------------------------
-	export LD	:=	$(CC)
-#---------------------------------------------------------------------------------
+# Tools
+# -----
+
+PREFIX		:= $(ARM_NONE_EABI_PATH)arm-none-eabi-
+CC		:= $(PREFIX)gcc
+CXX		:= $(PREFIX)g++
+OBJDUMP		:= $(PREFIX)objdump
+OBJCOPY		:= $(PREFIX)objcopy
+MKDIR		:= mkdir
+RM		:= rm -rf
+
+# Verbose flag
+# ------------
+
+ifeq ($(VERBOSE),1)
+V		:=
 else
-#---------------------------------------------------------------------------------
-	export LD	:=	$(CXX)
-#---------------------------------------------------------------------------------
+V		:= @
 endif
-#---------------------------------------------------------------------------------
 
-export OFILES	:=	$(addsuffix .o,$(BINFILES)) \
-					$(PNGFILES:.png=.o) \
-					$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
- 
-export INCLUDE	:=	$(foreach dir,$(INCLUDES),-iquote $(CURDIR)/$(dir)) \
-					$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
-					-I$(CURDIR)/$(BUILD)
- 
-export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+# Source files
+# ------------
 
-icons := $(wildcard *.bmp)
+ifneq ($(BINDIRS),)
+    SOURCES_BIN	:= $(shell find -L $(BINDIRS) -name "*.bin")
+    INCLUDEDIRS	+= $(addprefix $(BUILDDIR)/,$(BINDIRS))
+endif
 
-ifneq (,$(findstring $(TARGET).bmp,$(icons)))
-	export GAME_ICON := $(CURDIR)/$(TARGET).bmp
+SOURCES_S	:= $(shell find -L $(SOURCEDIRS) -name "*.s")
+SOURCES_C	:= $(shell find -L $(SOURCEDIRS) -name "*.c")
+SOURCES_CPP	:= $(shell find -L $(SOURCEDIRS) -name "*.cpp")
+
+# Compiler and linker flags
+# -------------------------
+
+DEFINES		+= -D__NDS__ -DARM9
+ARCH		:= -march=armv5te -mtune=arm946e-s
+
+WARNFLAGS	:= -Wall
+
+ifeq ($(SOURCES_CPP),)
+    LD	:= $(CC)
 else
-	ifneq (,$(findstring icon.bmp,$(icons)))
-		export GAME_ICON := $(CURDIR)/icon.bmp
-	endif
+    LD	:= $(CXX)
 endif
- 
-.PHONY: $(BUILD) clean
- 
-#---------------------------------------------------------------------------------
-$(BUILD):
-	@[ -d $@ ] || mkdir -p $@
-	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
- 
-#---------------------------------------------------------------------------------
+
+INCLUDEFLAGS	:= $(foreach path,$(INCLUDEDIRS),-I$(path)) \
+		   $(foreach path,$(LIBDIRS),-I$(path)/include)
+
+LIBDIRSFLAGS	:= $(foreach path,$(LIBDIRS),-L$(path)/lib)
+
+ASFLAGS		+= -x assembler-with-cpp $(DEFINES) $(ARCH) \
+		   -mthumb -mthumb-interwork $(INCLUDEFLAGS) \
+		   -ffunction-sections -fdata-sections
+
+CFLAGS		+= -std=gnu11 $(WARNFLAGS) $(DEFINES) $(ARCH) \
+		   -mthumb -mthumb-interwork $(INCLUDEFLAGS) -O2 \
+		   -ffunction-sections -fdata-sections \
+		   -fomit-frame-pointer -fPIC
+
+CXXFLAGS	+= -std=gnu++14 $(WARNFLAGS) $(DEFINES) $(ARCH) \
+		   -mthumb -mthumb-interwork $(INCLUDEFLAGS) -O2 \
+		   -ffunction-sections -fdata-sections \
+		   -fno-exceptions -fno-rtti \
+		   -fomit-frame-pointer -fPIC
+
+LDFLAGS		:= -mthumb -mthumb-interwork $(LIBDIRSFLAGS) \
+		   -Wl,-Map,$(MAP) -Wl,--gc-sections -nostartfiles -nostdlib \
+		   -T./exceptionstub.ld -Wl,--section-start,.crt0=0x2ffa000 \
+		   -Wl,--no-warn-rwx-segments \
+		   -Wl,--start-group $(LIBS) -lgcc -Wl,--end-group
+
+# Intermediate build files
+# ------------------------
+
+OBJS_ASSETS	:= $(addsuffix .o,$(addprefix $(BUILDDIR)/,$(SOURCES_BIN)))
+
+HEADERS_ASSETS	:= $(patsubst %.bin,%_bin.h,$(addprefix $(BUILDDIR)/,$(SOURCES_BIN)))
+
+OBJS_SOURCES	:= $(addsuffix .o,$(addprefix $(BUILDDIR)/,$(SOURCES_S))) \
+		   $(addsuffix .o,$(addprefix $(BUILDDIR)/,$(SOURCES_C))) \
+		   $(addsuffix .o,$(addprefix $(BUILDDIR)/,$(SOURCES_CPP)))
+
+OBJS		:= $(OBJS_ASSETS) $(OBJS_SOURCES)
+
+DEPS		:= $(OBJS:.o=.d)
+
+# Targets
+# -------
+
+.PHONY: all clean dump
+
+all: $(STUBBIN)
+
+$(ELF): $(OBJS)
+	@echo "  LD      $@"
+	$(V)$(LD) -o $@ $(OBJS) $(LDFLAGS)
+
+$(STUBBIN): $(ELF)
+	@echo "  OBJCOPY $@"
+	@$(OBJCOPY) -O binary $< $@
+
+$(DUMP): $(ELF)
+	@echo "  OBJDUMP $@"
+	$(V)$(OBJDUMP) -h -C -S $< > $@
+
+dump: $(DUMP)
+
 clean:
-	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).bin
+	@echo "  CLEAN"
+	$(V)$(RM) $(STUBBIN) $(BUILDDIR)
 
-#---------------------------------------------------------------------------------
-else
- 
-#---------------------------------------------------------------------------------
-# main targets
-#---------------------------------------------------------------------------------
-$(STUBBIN)	:	$(STUBELF)
-	$(OBJCOPY) -O binary $< $@
-	@echo built ... $(notdir $@)
+# Rules
+# -----
 
-$(STUBELF)	:	$(OFILES)
- 
-#---------------------------------------------------------------------------------
-%.bin.o	:	%.bin
-#---------------------------------------------------------------------------------
-	@echo $(notdir $<)
-	$(bin2o)
+$(BUILDDIR)/%.s.o : %.s
+	@echo "  AS      $<"
+	@$(MKDIR) -p $(@D)
+	$(V)$(CC) $(ASFLAGS) -MMD -MP -c -o $@ $<
 
--include $(DEPSDIR)/*.d
- 
-#---------------------------------------------------------------------------------------
-endif
-#---------------------------------------------------------------------------------------
+$(BUILDDIR)/%.c.o : %.c
+	@echo "  CC      $<"
+	@$(MKDIR) -p $(@D)
+	$(V)$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
+
+$(BUILDDIR)/%.cpp.o : %.cpp
+	@echo "  CXX     $<"
+	@$(MKDIR) -p $(@D)
+	$(V)$(CXX) $(CXXFLAGS) -MMD -MP -c -o $@ $<
+
+$(BUILDDIR)/%.bin.o $(BUILDDIR)/%_bin.h : %.bin
+	@echo "  BIN2C   $<"
+	@$(MKDIR) -p $(@D)
+	$(V)$(BLOCKSDS)/tools/bin2c/bin2c $< $(@D)
+	$(V)$(CC) $(CFLAGS) -MMD -MP -c -o $(BUILDDIR)/$*.bin.o $(BUILDDIR)/$*_bin.c
+
+# All assets must be built before the source code
+# -----------------------------------------------
+
+$(SOURCES_S) $(SOURCES_C) $(SOURCES_CPP): $(HEADERS_ASSETS)
+
+# Include dependency files if they exist
+# --------------------------------------
+
+-include $(DEPS)
