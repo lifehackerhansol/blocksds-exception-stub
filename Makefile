@@ -2,16 +2,11 @@
 #
 # SPDX-FileContributor: Antonio Niño Díaz, 2023
 
-BLOCKSDS	?= /opt/blocksds/core
-BLOCKSDSEXT	?= /opt/blocksds/external
+export BLOCKSDS			?= /opt/blocksds/core
+export BLOCKSDSEXT		?= /opt/blocksds/external
 
-WONDERFUL_TOOLCHAIN	?= /opt/wonderful
+export WONDERFUL_TOOLCHAIN	?= /opt/wonderful
 ARM_NONE_EABI_PATH	?= $(WONDERFUL_TOOLCHAIN)/toolchain/gcc-arm-none-eabi/bin/
-
-# User config
-# ===========
-
-NAME		:= $(shell basename $(CURDIR))
 
 # Source code paths
 # -----------------
@@ -32,9 +27,10 @@ LIBS		:= -lnds9 -lc
 LIBDIRS		:= $(BLOCKSDS)/libs/libnds
 
 # Build artifacts
-# -----------------
+# ---------------
 
 BUILDDIR	:= build/
+NAME		:= exceptionstub
 ELF		:= build/$(NAME).elf
 DUMP		:= build/$(NAME).dump
 MAP		:= build/$(NAME).map
@@ -46,8 +42,8 @@ export STUBBIN	?=	$(CURDIR)/$(NAME).bin
 PREFIX		:= $(ARM_NONE_EABI_PATH)arm-none-eabi-
 CC		:= $(PREFIX)gcc
 CXX		:= $(PREFIX)g++
-OBJDUMP		:= $(PREFIX)objdump
 OBJCOPY		:= $(PREFIX)objcopy
+OBJDUMP		:= $(PREFIX)objdump
 MKDIR		:= mkdir
 RM		:= rm -rf
 
@@ -75,15 +71,18 @@ SOURCES_CPP	:= $(shell find -L $(SOURCEDIRS) -name "*.cpp")
 # Compiler and linker flags
 # -------------------------
 
-DEFINES		+= -D__NDS__ -DARM9
-ARCH		:= -march=armv5te -mtune=arm946e-s
+ARCH		:= -mthumb -mthumb-interwork -mcpu=arm946e-s+nofp
+
+SPECS		:= $(CURDIR)/exceptionstub.specs
 
 WARNFLAGS	:= -Wall
 
 ifeq ($(SOURCES_CPP),)
-    LD	:= $(CC)
+	LD	:= $(CC)
+	LIBS	+= -lc
 else
-    LD	:= $(CXX)
+	LD	:= $(CXX)
+	LIBS	+= -lstdc++ -lc
 endif
 
 INCLUDEFLAGS	:= $(foreach path,$(INCLUDEDIRS),-I$(path)) \
@@ -91,26 +90,23 @@ INCLUDEFLAGS	:= $(foreach path,$(INCLUDEDIRS),-I$(path)) \
 
 LIBDIRSFLAGS	:= $(foreach path,$(LIBDIRS),-L$(path)/lib)
 
-ASFLAGS		+= -x assembler-with-cpp $(DEFINES) $(ARCH) \
-		   -mthumb -mthumb-interwork $(INCLUDEFLAGS) \
-		   -ffunction-sections -fdata-sections
+ASFLAGS		+= -x assembler-with-cpp $(DEFINES) $(INCLUDEFLAGS) \
+		   $(ARCH) -ffunction-sections -fdata-sections \
+		   -specs=$(SPECS)
 
-CFLAGS		+= -std=gnu11 $(WARNFLAGS) $(DEFINES) $(ARCH) \
-		   -mthumb -mthumb-interwork $(INCLUDEFLAGS) -O2 \
-		   -ffunction-sections -fdata-sections \
-		   -fomit-frame-pointer -fPIC
+CFLAGS		+= -std=gnu11 $(WARNFLAGS) $(DEFINES) $(INCLUDEFLAGS) \
+		   $(ARCH) -O2 -ffunction-sections -fdata-sections \
+		   -fomit-frame-pointer -fPIC \
+		   -specs=$(SPECS)
 
-CXXFLAGS	+= -std=gnu++14 $(WARNFLAGS) $(DEFINES) $(ARCH) \
-		   -mthumb -mthumb-interwork $(INCLUDEFLAGS) -O2 \
-		   -ffunction-sections -fdata-sections \
+CXXFLAGS	+= -std=gnu++14 $(WARNFLAGS) $(DEFINES) $(INCLUDEFLAGS) \
+		   $(ARCH) -O2 -ffunction-sections -fdata-sections \
 		   -fno-exceptions -fno-rtti \
-		   -fomit-frame-pointer -fPIC
+		   -fomit-frame-pointer -fPIC \
+		   -specs=$(SPECS)
 
-LDFLAGS		:= -mthumb -mthumb-interwork $(LIBDIRSFLAGS) \
-		   -Wl,-Map,$(MAP) -Wl,--gc-sections -nostartfiles -nostdlib \
-		   -T./exceptionstub.ld -Wl,--section-start,.crt0=0x2ffa000 \
-		   -Wl,--no-warn-rwx-segments \
-		   -Wl,--start-group $(LIBS) -lgcc -Wl,--end-group
+LDFLAGS		:= $(ARCH) $(LIBDIRSFLAGS) -Wl,-Map,$(MAP) $(DEFINES) \
+		   -Wl,--start-group $(LIBS) -Wl,--end-group -specs=$(SPECS) -nostartfiles
 
 # Intermediate build files
 # ------------------------
@@ -135,43 +131,53 @@ DEPS		:= $(OBJS:.o=.d)
 all: $(STUBBIN)
 
 $(ELF): $(OBJS)
-	@echo "  LD      $@"
+	@echo "  LD.9    $@"
 	$(V)$(LD) -o $@ $(OBJS) $(LDFLAGS)
 
 $(STUBBIN): $(ELF)
-	@echo "  OBJCOPY $@"
+	@echo "  OBJCOPY.9 $@"
 	@$(OBJCOPY) -O binary $< $@
 
 $(DUMP): $(ELF)
-	@echo "  OBJDUMP $@"
+	@echo "  OBJDUMP.9 $@"
 	$(V)$(OBJDUMP) -h -C -S $< > $@
 
 dump: $(DUMP)
 
 clean:
-	@echo "  CLEAN"
-	$(V)$(RM) $(STUBBIN) $(BUILDDIR)
+	@echo "  CLEAN.9"
+	$(V)$(RM) $(ELF) $(DUMP) $(MAP) $(BUILDDIR) $(STUBBIN)
 
 # Rules
 # -----
 
 $(BUILDDIR)/%.s.o : %.s
-	@echo "  AS      $<"
+	@echo "  AS.9    $<"
 	@$(MKDIR) -p $(@D)
 	$(V)$(CC) $(ASFLAGS) -MMD -MP -c -o $@ $<
 
 $(BUILDDIR)/%.c.o : %.c
-	@echo "  CC      $<"
+	@echo "  CC.9    $<"
 	@$(MKDIR) -p $(@D)
 	$(V)$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
+$(BUILDDIR)/%.arm.c.o : %.arm.c
+	@echo "  CC.9    $<"
+	@$(MKDIR) -p $(@D)
+	$(V)$(CC) $(CFLAGS) -MMD -MP -marm -mlong-calls -c -o $@ $<
+
 $(BUILDDIR)/%.cpp.o : %.cpp
-	@echo "  CXX     $<"
+	@echo "  CXX.9   $<"
 	@$(MKDIR) -p $(@D)
 	$(V)$(CXX) $(CXXFLAGS) -MMD -MP -c -o $@ $<
 
+$(BUILDDIR)/%.arm.cpp.o : %.arm.cpp
+	@echo "  CXX.9   $<"
+	@$(MKDIR) -p $(@D)
+	$(V)$(CXX) $(CXXFLAGS) -MMD -MP -marm -mlong-calls -c -o $@ $<
+
 $(BUILDDIR)/%.bin.o $(BUILDDIR)/%_bin.h : %.bin
-	@echo "  BIN2C   $<"
+	@echo "  BIN2C.9 $<"
 	@$(MKDIR) -p $(@D)
 	$(V)$(BLOCKSDS)/tools/bin2c/bin2c $< $(@D)
 	$(V)$(CC) $(CFLAGS) -MMD -MP -c -o $(BUILDDIR)/$*.bin.o $(BUILDDIR)/$*_bin.c
